@@ -1,0 +1,56 @@
+{
+    "dev": {
+        "app_function": "jawed.api.app",
+        "aws_region": "ap-northeast-1",
+        "project_name": "youtube-livechat-assistant",
+        "runtime": "python3.12",
+        "s3_bucket": "youtube-livechat-assistant-zappa",
+        "keep_warm": true,
+        "keep_warm_expression": "rate(5 minutes)",
+        "timeout_seconds": 30,
+        "memory_size": 256,
+        "environment_variables": {
+            "LOG_LEVEL": "INFO"
+        },
+        "exclude": [
+            ".git",
+            ".venv",
+            "__pycache__",
+            "*.pyc",
+            "tests",
+            "test-reports",
+            ".idea",
+            ".github",
+            ".circleci",
+            "*.md",
+            "*.egg-info"
+        ]
+    },
+    "prod": {
+        "app_function": "jawed.api.app",
+        "aws_region": "ap-northeast-1",
+        "project_name": "youtube-livechat-assistant",
+        "runtime": "python3.12",
+        "s3_bucket": "youtube-livechat-assistant-zappa",
+        "keep_warm": true,
+        "keep_warm_expression": "rate(5 minutes)",
+        "timeout_seconds": 30,
+        "memory_size": 512,
+        "environment_variables": {
+            "LOG_LEVEL": "WARNING"
+        },
+        "exclude": [
+            ".git",
+            ".venv",
+            "__pycache__",
+            "*.pyc",
+            "tests",
+            "test-reports",
+            ".idea",
+            ".github",
+            ".circleci",
+            "*.md",
+            "*.egg-info"
+        ]
+    }
+}
