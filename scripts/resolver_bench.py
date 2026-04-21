@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -542,6 +543,12 @@ def main() -> None:
         default=OSS_BASE_URL_DEFAULT,
         help=f"OpenAI-compatible endpoint for --model=oss (default: {OSS_BASE_URL_DEFAULT})",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=4,
+        help="Parallel LLM resolver workers (default: 4, matches Ollama OLLAMA_NUM_PARALLEL)",
+    )
     args = parser.parse_args()
     model_choice: ModelChoice = args.model
 
@@ -588,12 +595,24 @@ def main() -> None:
         for sc, vid in regex_hits
     ]
 
-    llm_rows: list[BenchRow] = []
-    for i, sc in enumerate(nl_only, 1):
-        print(f"  LLM [{i}/{len(nl_only)}]: {sc.text[:60]!r}", flush=True)
-        llm_rows.append(
-            resolve_llm_row(sc, model_choice, llm_model, anthropic_client, openai_client, yt_service),
-        )
+    llm_results: list[BenchRow | None] = [None] * len(nl_only)
+    if nl_only:
+        print(f"Resolving {len(nl_only)} NL-only rows with concurrency={args.concurrency} ...", flush=True)
+        with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+            future_to_idx = {
+                pool.submit(
+                    resolve_llm_row, sc, model_choice, llm_model, anthropic_client, openai_client, yt_service,
+                ): idx
+                for idx, sc in enumerate(nl_only)
+            }
+            for done_count, fut in enumerate(as_completed(future_to_idx), 1):
+                idx = future_to_idx[fut]
+                llm_results[idx] = fut.result()
+                print(
+                    f"  LLM [{done_count}/{len(nl_only)}]: {nl_only[idx].text[:60]!r}",
+                    flush=True,
+                )
+    llm_rows: list[BenchRow] = [r for r in llm_results if r is not None]
 
     print_regex_table(regex_rows)
     print_llm_table(llm_rows)
