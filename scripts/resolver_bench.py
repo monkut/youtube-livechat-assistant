@@ -11,9 +11,13 @@ Usage:
     uv run scripts/resolver_bench.py <VOD_URL> [--limit N] [--model MODEL]
 
 Environment:
-    ANTHROPIC_API_KEY — required for claude-haiku-4-5 (default model)
     YOUTUBE_API_KEY   — required for YouTube videos.list / search.list
-    OPENAI_API_KEY    — required for gpt-4o-mini model
+    ANTHROPIC_API_KEY — required for --model=claude (claude-haiku-4-5)
+    OPENAI_API_KEY    — required for --model=gpt (gpt-4o-mini)
+
+The default --model=oss talks to a local Ollama instance (no API key needed)
+at http://localhost:11434/v1 using gemma4:e4b. Start Ollama with
+`ollama pull gemma4:e4b` and `ollama serve` before running.
 """
 
 from __future__ import annotations
@@ -34,25 +38,24 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
 import anthropic
+import openai
 from anthropic.types import ToolParam
 from googleapiclient.discovery import build
 
 from jawed.definitions import YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION
 
-try:
-    import openai  # type: ignore[import-untyped]
-except ImportError:
-    openai = None  # type: ignore[assignment]
-
-ModelChoice = Literal["claude", "gpt"]
+ModelChoice = Literal["oss", "claude", "gpt"]
 
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 GPT_MODEL = "gpt-4o-mini"
+OSS_MODEL_DEFAULT = "gemma4:e4b"
+OSS_BASE_URL_DEFAULT = "http://localhost:11434/v1"
 CANDIDATE_TITLE_MAX_LEN = 30
 VIDEOS_LIST_BATCH_SIZE = 50
 SEARCH_LIST_QUOTA_UNITS = 100
 
-# Input/output USD cost per token, keyed by model ID.
+# Input/output USD cost per token, keyed by model ID. Local Ollama models
+# have no entry so PRICING.get(..., (0.0, 0.0)) yields zero cost.
 PRICING: dict[str, tuple[float, float]] = {
     CLAUDE_MODEL: (0.25 / 1_000_000, 1.25 / 1_000_000),
     GPT_MODEL: (0.15 / 1_000_000, 0.60 / 1_000_000),
@@ -119,11 +122,57 @@ SYSTEM_PROMPT = textwrap.dedent("""\
 """)
 
 
+# YouTube SuperChat display-string prefixes, ordered longest-first so
+# "CA$" wins before "$". VOD-replay only exposes the formatted string
+# (e.g. "$10.00"); the live liveChatMessages.list API returns a proper
+# ISO currency + amountMicros (see P9a). "$" alone is ambiguous across
+# USD/CAD/AUD/HKD/...: default to USD and flag via currency_ambiguous.
+CURRENCY_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("CA$", "CAD"),
+    ("AU$", "AUD"),
+    ("A$", "AUD"),
+    ("HK$", "HKD"),
+    ("NZ$", "NZD"),
+    ("MX$", "MXN"),
+    ("NT$", "TWD"),
+    ("R$", "BRL"),
+    ("S$", "SGD"),
+    ("€", "EUR"),
+    ("£", "GBP"),
+    ("¥", "JPY"),
+    ("₹", "INR"),
+    ("₩", "KRW"),
+    ("₱", "PHP"),
+    ("฿", "THB"),
+    ("₽", "RUB"),
+    ("₺", "TRY"),
+    ("$", "USD"),
+)
+_AMBIGUOUS_SYMBOLS = frozenset({"$"})
+
+
+def parse_amount_text(text: str) -> tuple[float | None, str | None, bool]:
+    """Split a YouTube SuperChat display string into (value, ISO currency, ambiguous)."""
+    s = text.strip()
+    for prefix, iso in CURRENCY_PREFIXES:
+        if s.startswith(prefix):
+            numeric = s[len(prefix) :].strip().replace(",", "")
+            try:
+                value: float | None = float(numeric)
+            except ValueError:
+                value = None
+            return value, iso, prefix in _AMBIGUOUS_SYMBOLS
+    return None, None, False
+
+
 @dataclass
 class SuperChat:
     text: str
     author: str
-    amount: str
+    amount_display: str
+    amount_value: float | None
+    currency: str | None
+    currency_ambiguous: bool
     timestamp_usec: str
     video_offset_ms: str
 
@@ -210,10 +259,15 @@ def _extract_superchat(entry: dict[str, Any]) -> SuperChat | None:
         text = "".join(run.get("text", "") for run in runs).strip()
         if not text:
             continue
+        amount_display = renderer.get("purchaseAmountText", {}).get("simpleText", "")
+        amount_value, currency, currency_ambiguous = parse_amount_text(amount_display)
         return SuperChat(
             text=text,
             author=renderer.get("authorName", {}).get("simpleText", ""),
-            amount=renderer.get("purchaseAmountText", {}).get("simpleText", ""),
+            amount_display=amount_display,
+            amount_value=amount_value,
+            currency=currency,
+            currency_ambiguous=currency_ambiguous,
             timestamp_usec=str(renderer.get("timestampUsec", "")),
             video_offset_ms=offset_ms,
         )
@@ -288,9 +342,9 @@ def resolve_claude(text: str, client: anthropic.Anthropic) -> tuple[Resolved, in
     return resolved, response.usage.input_tokens, response.usage.output_tokens
 
 
-def resolve_gpt(text: str, client: Any) -> tuple[Resolved, int, int]:
+def resolve_openai_compat(text: str, client: Any, model: str) -> tuple[Resolved, int, int]:
     response = client.chat.completions.create(
-        model=GPT_MODEL,
+        model=model,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": text},
@@ -414,6 +468,7 @@ def print_summary(regex_rows: list[BenchRow], llm_rows: list[BenchRow]) -> None:
 def resolve_llm_row(
     sc: SuperChat,
     model_choice: ModelChoice,
+    llm_model: str,
     anthropic_client: anthropic.Anthropic | None,
     openai_client: Any,
     yt_service: Any,
@@ -422,19 +477,17 @@ def resolve_llm_row(
         if anthropic_client is None:
             raise RuntimeError("anthropic_client required for claude model")
         resolved, in_tok, out_tok = resolve_claude(sc.text, anthropic_client)
-        model_label = CLAUDE_MODEL
     else:
         if openai_client is None:
-            raise RuntimeError("openai_client required for gpt model")
-        resolved, in_tok, out_tok = resolve_gpt(sc.text, openai_client)
-        model_label = GPT_MODEL
+            raise RuntimeError("openai_client required for oss / gpt models")
+        resolved, in_tok, out_tok = resolve_openai_compat(sc.text, openai_client, llm_model)
     candidates = search_youtube(resolved, yt_service)
     return BenchRow(
         superchat=sc,
         resolver_path="llm",
         resolved=resolved,
         candidates=candidates,
-        model=model_label,
+        model=llm_model,
         input_tokens=in_tok,
         output_tokens=out_tok,
     )
@@ -442,22 +495,31 @@ def resolve_llm_row(
 
 def build_resolver_clients(
     model_choice: ModelChoice,
-) -> tuple[anthropic.Anthropic | None, Any]:
+    oss_base_url: str,
+    oss_model: str,
+) -> tuple[anthropic.Anthropic | None, Any, str]:
+    """Return (anthropic_client, openai_client, llm_model_label)."""
     anthropic_client: anthropic.Anthropic | None = None
     openai_client: Any = None
+    llm_model = ""
     if model_choice == "claude":
         key = os.getenv("ANTHROPIC_API_KEY")
         if not key:
             sys.exit("ANTHROPIC_API_KEY environment variable is required")
         anthropic_client = anthropic.Anthropic(api_key=key)
-    else:
-        if openai is None:
-            sys.exit("openai package is not installed; run `uv add openai` or choose --model claude")
+        llm_model = CLAUDE_MODEL
+    elif model_choice == "gpt":
         key = os.getenv("OPENAI_API_KEY")
         if not key:
             sys.exit("OPENAI_API_KEY environment variable is required")
         openai_client = openai.OpenAI(api_key=key)
-    return anthropic_client, openai_client
+        llm_model = GPT_MODEL
+    else:
+        # Ollama's OpenAI-compatible endpoint ignores the API key; "ollama" is a
+        # sentinel string accepted by any OpenAI-compatible server.
+        openai_client = openai.OpenAI(api_key="ollama", base_url=oss_base_url)
+        llm_model = oss_model
+    return anthropic_client, openai_client, llm_model
 
 
 def main() -> None:
@@ -466,9 +528,19 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None, help="Max SuperChats to process (default: all)")
     parser.add_argument(
         "--model",
-        choices=["claude", "gpt"],
-        default="claude",
-        help="LLM resolver to use for NL-only rows (default: claude)",
+        choices=["oss", "claude", "gpt"],
+        default="oss",
+        help="LLM resolver for NL-only rows (default: oss = local Ollama)",
+    )
+    parser.add_argument(
+        "--oss-model",
+        default=OSS_MODEL_DEFAULT,
+        help=f"Ollama model tag for --model=oss (default: {OSS_MODEL_DEFAULT})",
+    )
+    parser.add_argument(
+        "--oss-base-url",
+        default=OSS_BASE_URL_DEFAULT,
+        help=f"OpenAI-compatible endpoint for --model=oss (default: {OSS_BASE_URL_DEFAULT})",
     )
     args = parser.parse_args()
     model_choice: ModelChoice = args.model
@@ -478,7 +550,9 @@ def main() -> None:
         sys.exit("YOUTUBE_API_KEY environment variable is required")
 
     yt_service = build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, developerKey=youtube_api_key)
-    anthropic_client, openai_client = build_resolver_clients(model_choice)
+    anthropic_client, openai_client, llm_model = build_resolver_clients(
+        model_choice, args.oss_base_url, args.oss_model,
+    )
 
     print(f"Fetching SuperChats from {args.vod_url} via yt-dlp ...", flush=True)
     superchats = fetch_superchats(args.vod_url, args.limit)
@@ -517,7 +591,9 @@ def main() -> None:
     llm_rows: list[BenchRow] = []
     for i, sc in enumerate(nl_only, 1):
         print(f"  LLM [{i}/{len(nl_only)}]: {sc.text[:60]!r}", flush=True)
-        llm_rows.append(resolve_llm_row(sc, model_choice, anthropic_client, openai_client, yt_service))
+        llm_rows.append(
+            resolve_llm_row(sc, model_choice, llm_model, anthropic_client, openai_client, yt_service),
+        )
 
     print_regex_table(regex_rows)
     print_llm_table(llm_rows)
