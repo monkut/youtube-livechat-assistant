@@ -23,7 +23,6 @@ license-files = ["LICENSE"]
 dependencies = [
     "anthropic>=0.96.0",
     "boto3>=1.42.23",
-    "chat-downloader>=0.2.8",
     "flask>=3.1.2",
     "flask-smorest>=0.46.2",
     "google-api-python-client>=2.187.0",
@@ -43,6 +42,9 @@ dev = [
     "ruff>=0.9.10",
     "pytest>=8.3.5",
     "poethepoet>=0.34.0",
+    # Pinned: 2026.03.17 verified against current YouTube VODs for live_chat subs
+    # (Phase 0 bench). Unpin only after verifying a newer release still works.
+    "yt-dlp==2026.3.17",
 ]
 
 [build-system]
@@ -90,7 +92,7 @@ unsafe-fixes = false
 
 [tool.ruff.lint]
 select = ["ALL"]
-extend-per-file-ignores = { "**/__init__.py" = ["I", "F403"], "scripts/**" = ["T201", "ANN401", "PLR2004"] }
+extend-per-file-ignores = { "**/__init__.py" = ["I", "F403"], "scripts/**" = ["T201", "ANN401", "PLR2004", "S603"] }
 extend-safe-fixes = [
     "D200",  # unnecessary-multiline-docstring
     "ANN204"  # missing-return-type-special-method (__init__)
