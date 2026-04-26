@@ -227,3 +227,7 @@ notebooks/*.jpg
 
 CLAUDE.md
 git-workflow.md
+
+# Claude Code artifacts
+.claude/
+CHECKPOINT*.md
