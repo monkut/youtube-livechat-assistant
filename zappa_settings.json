@@ -5,8 +5,7 @@
         "project_name": "youtube-livechat-assistant",
         "runtime": "python3.14",
         "s3_bucket": "youtube-livechat-assistant-zappa",
-        "keep_warm": true,
-        "keep_warm_expression": "rate(5 minutes)",
+        "keep_warm": false,
         "timeout_seconds": 30,
         "memory_size": 256,
         "environment_variables": {
@@ -32,8 +31,7 @@
         "project_name": "youtube-livechat-assistant",
         "runtime": "python3.14",
         "s3_bucket": "youtube-livechat-assistant-zappa",
-        "keep_warm": true,
-        "keep_warm_expression": "rate(5 minutes)",
+        "keep_warm": false,
         "timeout_seconds": 30,
         "memory_size": 512,
         "environment_variables": {
