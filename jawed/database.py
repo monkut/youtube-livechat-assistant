@@ -3,7 +3,7 @@
 import json
 import logging
 import sqlite3
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -95,9 +95,6 @@ def init_channel_db(channel_id: str) -> None:
                 updated_at TEXT NOT NULL
             )
         """)
-        # Migrate existing DBs that predate issued_at column
-        with suppress(sqlite3.OperationalError):
-            cursor.execute("ALTER TABLE channel_config ADD COLUMN issued_at TEXT")
 
         # Song/video requests
         cursor.execute("""
