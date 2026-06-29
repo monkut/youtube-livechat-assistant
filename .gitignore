@@ -231,3 +231,6 @@ git-workflow.md
 # Claude Code artifacts
 .claude/
 CHECKPOINT*.md
+
+# Phase 0 raw API payloads (may contain PII)
+docs/phase0/*.json
