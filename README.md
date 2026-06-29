@@ -1,6 +1,10 @@
 # jawed README
 
-A youtube live chat assitant that monitors active chats for commands
+A YouTube live chat assistant that monitors active chats for song requests and posts them back to the stream.
+
+## Documentation
+
+- [Customer Onboarding Runbook](docs/onboarding.md) — how to register a new YouTube channel and start accepting requests
 
 ## 構成
 
